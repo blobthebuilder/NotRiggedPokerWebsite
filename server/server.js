@@ -9,7 +9,10 @@ const { createGame } = require("./gameState");
 const app = express();
 app.use(
   cors({
-    origin: "*", // In production, change this to your Next.js domain
+    origin: [
+      "https://notriggedpokerwebsite.onrender.com",
+      "http://localhost:3000",
+    ],
   }),
 );
 app.use(express.json());
