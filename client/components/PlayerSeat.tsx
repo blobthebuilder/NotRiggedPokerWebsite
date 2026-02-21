@@ -103,23 +103,29 @@ export const PlayerSeat = ({
                   {phase === "showdown" && showdownData?.allHoleCards ? (
                     showdownData.allHoleCards
                       .find((p: any) => p.id === seat.id)
-                      ?.cards.map((card: any, cIdx: number) => (
-                        <div
-                          key={cIdx}
-                          className="w-8 h-12 bg-white rounded border border-gray-300 flex flex-col items-center justify-center text-black font-bold text-[10px] shadow-md">
-                          <span>{card.value === "T" ? "10" : card.value}</span>
-                          <span
-                            className={
-                              card.suit === "hearts" || card.suit === "diamonds"
-                                ? "text-red-600"
-                                : ""
-                            }>
-                            {card.suit === "hearts" || card.suit === "diamonds"
-                              ? "♥"
-                              : "♠"}
-                          </span>
-                        </div>
-                      ))
+                      ?.cards.map((card: any, cIdx: number) => {
+                        const isRed =
+                          card.suit === "hearts" || card.suit === "diamonds";
+                        return (
+                          <div
+                            key={cIdx}
+                            className="w-8 h-12 bg-white rounded border border-gray-300 flex flex-col items-center justify-center text-black font-bold text-[10px] shadow-md">
+                            <span>
+                              {card.value === "T" ? "10" : card.value}
+                            </span>
+                            <span
+                              className={isRed ? "text-red-600" : "text-black"}>
+                              {card.suit === "hearts"
+                                ? "♥"
+                                : card.suit === "diamonds"
+                                  ? "♦"
+                                  : card.suit === "spades"
+                                    ? "♠"
+                                    : "♣"}
+                            </span>
+                          </div>
+                        );
+                      })
                   ) : (
                     <>
                       <div className="w-8 h-12 bg-red-800 rounded border border-white/50 pattern-diagonal-lines"></div>

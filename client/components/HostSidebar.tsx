@@ -1,3 +1,6 @@
+import { AdjustChipsModal } from "./AdjustChipsModal";
+import { useState } from "react";
+
 export const HostSidebar = ({
   isOpen,
   setIsOpen,
@@ -11,8 +14,11 @@ export const HostSidebar = ({
   bbState,
   timeoutState,
   settingsStatus,
+  handleAdjustChips,
 }: any) => {
   if (!isHost) return null;
+
+  const [showAdjustModal, setShowAdjustModal] = useState(false);
 
   return (
     <>
@@ -120,6 +126,35 @@ export const HostSidebar = ({
                   </button>
                 </div>
               </div>
+
+              <button
+                onClick={() => setShowAdjustModal(true)}
+                className="w-full mt-2 bg-gray-800 hover:bg-gray-700 text-gray-300 py-3 rounded-xl font-bold text-xs border border-gray-700 transition-all flex items-center justify-center gap-2">
+                <svg
+                  className="w-4 h-4"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24">
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M12 6v6m0 0v6m0-6h6m-6 0H6"
+                  />
+                </svg>
+                Adjust Chips
+              </button>
+
+              {showAdjustModal && (
+                <AdjustChipsModal
+                  seats={gameState.seats}
+                  onClose={() => setShowAdjustModal(false)}
+                  onAdjust={(index, amount) => {
+                    // This function will be passed down from page.tsx
+                    handleAdjustChips(index, amount);
+                  }}
+                />
+              )}
             </div>
 
             {/* Footer Action */}

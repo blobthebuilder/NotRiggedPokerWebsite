@@ -47,6 +47,7 @@ function createGame(gameId, hostToken) {
     currentTurnIndex: null,
     dealerButtonIndex: -1, // Starts at -1 so the first hand moves it to 0
     highestBet: 0,
+    logs: [],
   });
 }
 
@@ -154,23 +155,32 @@ function advancePhase(game) {
     }
   });
 
+  let dealtCards = [];
+
   if (game.phase === "preflop") {
     game.phase = "flop";
-    game.communityCards.push(game.deck.pop(), game.deck.pop(), game.deck.pop());
+    const cards = [game.deck.pop(), game.deck.pop(), game.deck.pop()];
+    dealtCards = cards;
+    game.communityCards.push(...cards);
   } else if (game.phase === "flop") {
     game.phase = "turn";
-    game.communityCards.push(game.deck.pop());
+    const card = game.deck.pop();
+    dealtCards = [card];
+    game.communityCards.push(card);
   } else if (game.phase === "turn") {
     game.phase = "river";
-    game.communityCards.push(game.deck.pop());
+    const card = game.deck.pop();
+    dealtCards = [card];
+    game.communityCards.push(card);
   } else if (game.phase === "river") {
     game.phase = "showdown";
-    return; // Showdown logic handled elsewhere
+    console.log(`--- SHOWDOWN REACHED ---`);
+    return;
   }
 
   // --- LOGGING: Community Cards ---
   console.log(
-    `Phase: ${game.phase.toUpperCase().padEnd(8)} | Dealt: ${dealt.map((c) => `${c.value}${c.suit[0]}`).join(" ")}`,
+    `Phase: ${game.phase.toUpperCase().padEnd(8)} | Dealt: ${dealtCards.map((c) => `${c.value}${c.suit[0]}`).join(" ")}`,
   );
 
   // After preflop, the first to act is the Small Blind (or next active after dealer)

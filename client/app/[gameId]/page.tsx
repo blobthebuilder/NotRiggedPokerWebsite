@@ -185,6 +185,16 @@ export default function GameRoom({ params }: { params: Promise<RouteParams> }) {
     socketRef.current?.emit("update_player_name", { gameId, name });
   };
 
+  const handleAdjustChips = (seatIndex: number, amountDelta: number) => {
+    if (!socketRef.current || !isHost) return;
+
+    socketRef.current.emit("host_adjust_chips", {
+      gameId,
+      hostToken,
+      seatIndex,
+      amountDelta,
+    });
+  };
   const handleAction = (actionType: string, amount: number = 0) => {
     if (!socketRef.current) return;
     socketRef.current.emit("player_action", {
@@ -303,6 +313,7 @@ export default function GameRoom({ params }: { params: Promise<RouteParams> }) {
         bbState={[newBigBlind, setNewBigBlind]}
         timeoutState={[newTimeout, setNewTimeout]}
         settingsStatus={settingsStatus}
+        handleAdjustChips={handleAdjustChips}
       />
 
       <div className="flex-1 p-8 flex flex-col overflow-y-auto relative">

@@ -28,6 +28,10 @@ const io = new Server(server, {
   },
 });
 
+app.get("/api/games", (req, res) => {
+  res.status(200).send("Server is awake");
+});
+
 // REST Endpoint to create a new game
 app.post("/api/games", (req, res) => {
   const gameId = crypto.randomBytes(4).toString("hex"); // e.g., 'a1b2c3d4'
