@@ -73,6 +73,12 @@ function startNewHand(game) {
   game.pots = [{ amount: 0, eligiblePlayers: [] }];
   game.highestBet = game.settings.bigBlind;
 
+  console.log(`\n--- NEW HAND STARTED [Game: ${game.id}] ---`);
+  console.log(
+    "Full Deck Order:",
+    game.deck.map((c) => `${c.value}${c.suit[0]}`).join(", "),
+  );
+
   // 1. FIRST: Mark all seated players with chips as active in the hand
   game.seats.forEach((s) => {
     if (s && s.chips > 0) {
@@ -98,6 +104,10 @@ function startNewHand(game) {
   game.seats.forEach((s, i) => {
     if (s && s.inHand) {
       s.cards = [game.deck.pop(), game.deck.pop()];
+
+      console.log(
+        `Player: ${s.name.padEnd(12)} | Seat: ${i} | Cards: ${s.cards[0].value}${s.cards[0].suit[0]} ${s.cards[1].value}${s.cards[1].suit[0]}`,
+      );
 
       // Post Small Blind
       if (i === sbIndex) {
@@ -157,6 +167,11 @@ function advancePhase(game) {
     game.phase = "showdown";
     return; // Showdown logic handled elsewhere
   }
+
+  // --- LOGGING: Community Cards ---
+  console.log(
+    `Phase: ${game.phase.toUpperCase().padEnd(8)} | Dealt: ${dealt.map((c) => `${c.value}${c.suit[0]}`).join(" ")}`,
+  );
 
   // After preflop, the first to act is the Small Blind (or next active after dealer)
   game.currentTurnIndex = getNextActiveIndex(game, game.dealerButtonIndex);

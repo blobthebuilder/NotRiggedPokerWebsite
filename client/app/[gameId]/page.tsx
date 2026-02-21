@@ -6,6 +6,8 @@ import { HostSidebar } from "@/components/HostSidebar";
 import { PokerTable } from "@/components/PokerTable";
 import { PlayerSeat } from "@/components/PlayerSeat";
 import { ActionHUD } from "@/components/ActionHUD";
+import { NameModal } from "@/components/NameModal";
+import { BuyInModal } from "@/components/BuyInModal";
 
 interface RouteParams {
   gameId: string;
@@ -43,6 +45,13 @@ export default function GameRoom({ params }: { params: Promise<RouteParams> }) {
   const [isLeaving, setIsLeaving] = useState(false);
   const [isHostSidebarOpen, setIsHostSidebarOpen] = useState(true);
 
+  const [showNameModal, setShowNameModal] = useState(false);
+
+  const [showBuyInModal, setShowBuyInModal] = useState(false);
+  const [selectedSeatIndex, setSelectedSeatIndex] = useState<number | null>(
+    null,
+  );
+
   useEffect(() => {
     const getCookie = (name: string) => {
       const value = `; ${document.cookie}`;
@@ -66,12 +75,11 @@ export default function GameRoom({ params }: { params: Promise<RouteParams> }) {
 
     let localPlayerName = getCookie("poker_playerName");
     if (!localPlayerName) {
-      localPlayerName =
-        window.prompt("Enter your display name:", "PokerPro") ||
-        `Player_${localPlayerId}`;
+      setShowNameModal(true);
       document.cookie = `poker_playerName=${localPlayerName}; path=/; max-age=86400; SameSite=Strict`;
+    } else {
+      setPlayerName(localPlayerName);
     }
-    setPlayerName(localPlayerName);
 
     const socket = io(process.env.NEXT_PUBLIC_SOCKET_URL);
     socketRef.current = socket;
@@ -165,7 +173,16 @@ export default function GameRoom({ params }: { params: Promise<RouteParams> }) {
 
   const copyLink = () => {
     navigator.clipboard.writeText(inviteLink);
-    // Optional: You could trigger your 'showStatus' helper here to say "Link Copied!"
+    setSettingsStatus("copied"); // Use a specific string to trigger the tiny bubble
+    setTimeout(() => setSettingsStatus(null), 2000);
+  };
+  const handleNameSubmit = (name: string) => {
+    document.cookie = `poker_playerName=${name}; path=/; max-age=86400; SameSite=Strict`;
+    setPlayerName(name);
+    setShowNameModal(false);
+
+    // If socket is already connected, you might want to emit a name update here
+    socketRef.current?.emit("update_player_name", { gameId, name });
   };
 
   const handleAction = (actionType: string, amount: number = 0) => {
@@ -184,23 +201,31 @@ export default function GameRoom({ params }: { params: Promise<RouteParams> }) {
   };
 
   const requestSeat = (seatIndex: number) => {
-    if (!socketRef.current) return;
     const alreadySeated = gameState.seats.some(
       (s: any) => s && s.id === playerId,
     );
     if (alreadySeated || hasPendingRequest) return;
 
-    const buyIn = prompt("Enter buy-in amount:", "1000");
-    if (buyIn) {
-      if (!isHost) setHasPendingRequest(true);
-      socketRef.current.emit("request_seat", {
-        gameId,
-        seatIndex,
-        buyInAmount: parseInt(buyIn),
-        playerInfo: { id: playerId, name: playerName },
-        hostToken,
-      });
-    }
+    setSelectedSeatIndex(seatIndex);
+    setShowBuyInModal(true);
+  };
+
+  // The new handler for when the modal is submitted
+  const handleBuyInSubmit = (amount: number) => {
+    if (!socketRef.current || selectedSeatIndex === null) return;
+
+    if (!isHost) setHasPendingRequest(true);
+
+    socketRef.current.emit("request_seat", {
+      gameId,
+      seatIndex: selectedSeatIndex,
+      buyInAmount: amount,
+      playerInfo: { id: playerId, name: playerName },
+      hostToken,
+    });
+
+    setShowBuyInModal(false);
+    setSelectedSeatIndex(null);
   };
 
   const resolveRequest = (req: any, approved: boolean) => {
@@ -257,6 +282,14 @@ export default function GameRoom({ params }: { params: Promise<RouteParams> }) {
 
   return (
     <div className="min-h-screen bg-gray-900 flex text-white overflow-hidden">
+      {showNameModal && <NameModal onNameSubmit={handleNameSubmit} />}
+      {showBuyInModal && selectedSeatIndex !== null && (
+        <BuyInModal
+          seatIndex={selectedSeatIndex}
+          onClose={() => setShowBuyInModal(false)}
+          onSubmit={handleBuyInSubmit}
+        />
+      )}
       <HostSidebar
         isOpen={isHostSidebarOpen}
         setIsOpen={setIsHostSidebarOpen}
@@ -302,6 +335,12 @@ export default function GameRoom({ params }: { params: Promise<RouteParams> }) {
 
           {/* BOTTOM LEFT: Invite Link */}
           <div className="absolute bottom-6 left-6 z-40 bg-gray-900/60 backdrop-blur-sm p-3 rounded-xl border border-gray-700 hover:border-gray-500 transition-colors group">
+            {/* TINY COPY BUBBLE */}
+            {settingsStatus === "copied" && (
+              <div className="absolute -top-10 left-0 bg-blue-600 text-white text-[10px] font-black py-1 px-3 rounded-full shadow-lg animate-bounce border border-blue-400">
+                COPIED!
+              </div>
+            )}
             <h2 className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-1">
               Invite Players
             </h2>
