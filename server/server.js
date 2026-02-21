@@ -17,7 +17,10 @@ app.use(express.json());
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: "*", // Update this to your Next.js domain in production
+    origin: [
+      "https://notriggedpokerwebsite.onrender.com",
+      "http://localhost:3000",
+    ], // Update this to your Next.js domain in production
     methods: ["GET", "POST"],
   },
 });
