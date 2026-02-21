@@ -10,9 +10,13 @@ export default function Home() {
   const handleCreateGame = async () => {
     setIsCreating(true);
     try {
-      const response = await fetch("http://localhost:3001/api/games", {
-        method: "POST",
-      });
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_SOCKET_URL}/api/games`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+        },
+      );
 
       const { gameId, hostToken } = await response.json();
       // Save the host token so this user has admin rights when they join

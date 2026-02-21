@@ -73,9 +73,7 @@ export default function GameRoom({ params }: { params: Promise<RouteParams> }) {
     }
     setPlayerName(localPlayerName);
 
-    const socket = io(
-      process.env.NEXT_PUBLIC_SOCKET_URL || "http://localhost:3001",
-    );
+    const socket = io(process.env.NEXT_PUBLIC_SOCKET_URL);
     socketRef.current = socket;
 
     socket.on("connect", () => {
