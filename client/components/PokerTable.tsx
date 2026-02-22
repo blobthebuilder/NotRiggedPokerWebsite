@@ -1,3 +1,5 @@
+import { getSuitDetails } from "@/lib/getSuits";
+
 export const PokerTable = ({ gameState, children }: any) => {
   return (
     <div className="relative w-full max-w-5xl mx-auto h-[650px] mt-4 flex items-center justify-center shrink-0">
@@ -10,26 +12,22 @@ export const PokerTable = ({ gameState, children }: any) => {
           <div className="flex space-x-2 mb-6">
             {[...Array(5)].map((_, i) => {
               const card = gameState.communityCards[i];
+              const suitDetails = card ? getSuitDetails(card.suit) : null;
+
               return card ? (
                 <div
                   key={i}
-                  className="w-16 h-24 bg-white rounded border border-gray-300 flex flex-col items-center justify-center text-black font-bold text-xl shadow-md animate-flip-in">
+                  className="w-20 h-28 sm:w-24 sm:h-32 bg-white rounded-xl border-2 border-gray-300 flex flex-col items-center justify-center text-black font-extrabold text-2xl sm:text-3xl shadow-2xl animate-flip-in">
                   <span>{card.value === "T" ? "10" : card.value}</span>
                   <span
-                    className={
-                      card.suit === "hearts" || card.suit === "diamonds"
-                        ? "text-red-600 text-2xl"
-                        : "text-black text-2xl"
-                    }>
-                    {card.suit === "hearts" || card.suit === "diamonds"
-                      ? "♥"
-                      : "♠"}
+                    className={`${suitDetails?.color} text-4xl sm:text-5xl mt-1`}>
+                    {suitDetails?.icon}
                   </span>
                 </div>
               ) : (
                 <div
                   key={i}
-                  className="w-16 h-24 bg-black/20 border-2 border-green-900/40 rounded shadow-inner"></div>
+                  className="w-20 h-28 sm:w-24 sm:h-32 bg-black/20 border-2 border-green-900/40 rounded-xl shadow-inner"></div>
               );
             })}
           </div>

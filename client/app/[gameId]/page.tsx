@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useRef, use } from "react";
+import { useRouter } from "next/navigation";
 import { io, Socket } from "socket.io-client";
 import { HostSidebar } from "@/components/HostSidebar";
 import { PokerTable } from "@/components/PokerTable";
@@ -8,6 +9,7 @@ import { PlayerSeat } from "@/components/PlayerSeat";
 import { ActionHUD } from "@/components/ActionHUD";
 import { NameModal } from "@/components/NameModal";
 import { BuyInModal } from "@/components/BuyInModal";
+import { GameLogModal } from "@/components/GameLogModal";
 
 interface RouteParams {
   gameId: string;
@@ -17,7 +19,12 @@ export default function GameRoom({ params }: { params: Promise<RouteParams> }) {
   const resolvedParams = use(params);
   const gameId = resolvedParams.gameId;
 
+  const router = useRouter();
+
   const [gameState, setGameState] = useState<any>(null);
+  const [gameExists, setGameExists] = useState(true);
+  const [serverDown, setServerDown] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
   const [playerId, setPlayerId] = useState<string>("");
   const [playerName, setPlayerName] = useState<string>("");
   const [isHost, setIsHost] = useState(false);
@@ -38,20 +45,109 @@ export default function GameRoom({ params }: { params: Promise<RouteParams> }) {
   const [myCards, setMyCards] = useState<any[]>([]);
   const [isRaising, setIsRaising] = useState(false);
   const [raiseAmount, setRaiseAmount] = useState(0);
+  const [isLeaving, setIsLeaving] = useState(false);
 
   // NEW: State to hold the winner and revealed cards during showdown
   const [showdownData, setShowdownData] = useState<any>(null);
 
-  const [isLeaving, setIsLeaving] = useState(false);
+  // menu info
   const [isHostSidebarOpen, setIsHostSidebarOpen] = useState(true);
-
   const [showNameModal, setShowNameModal] = useState(false);
-
   const [showBuyInModal, setShowBuyInModal] = useState(false);
   const [selectedSeatIndex, setSelectedSeatIndex] = useState<number | null>(
     null,
   );
+  const [showLogModal, setShowLogModal] = useState(false);
 
+  // --- VIDEO STATES ---
+  const [isVideoEnabled, setIsVideoEnabled] = useState(false); // Default to off
+  const [myStream, setMyStream] = useState<MediaStream | null>(null);
+  const [peerStreams, setPeerStreams] = useState<Record<string, MediaStream>>(
+    {},
+  );
+  const peerInstance = useRef<any>(null);
+
+  // --- VIDEO CHAT INITIALIZATION (LAZY LOADED) ---
+  useEffect(() => {
+    // If the user hasn't toggled the camera on, do nothing!
+    if (!isVideoEnabled || !playerId) return;
+
+    let localStream: MediaStream;
+    let peer: any;
+
+    const initVideo = async () => {
+      try {
+        // 1. Request camera ONLY NOW
+        localStream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            width: { ideal: 160 },
+            height: { ideal: 120 },
+            frameRate: { ideal: 15 },
+          },
+          audio: false,
+        });
+        setMyStream(localStream);
+
+        // 2. Start PeerJS
+        const Peer = (await import("peerjs")).default;
+        peer = new Peer();
+        peerInstance.current = peer;
+
+        peer.on("open", (id: string) => {
+          socketRef.current?.emit("video_peer_ready", {
+            gameId,
+            peerId: id,
+            playerId,
+          });
+        });
+
+        peer.on("call", (call: any) => {
+          call.answer(localStream);
+          call.on("stream", (remoteStream: MediaStream) => {
+            setPeerStreams((prev) => ({
+              ...prev,
+              [call.metadata.playerId]: remoteStream,
+            }));
+          });
+        });
+
+        socketRef.current?.on(
+          "user_video_joined",
+          ({ peerId: remotePeerId, playerId: remotePlayerId }: any) => {
+            const call = peer.call(remotePeerId, localStream, {
+              metadata: { playerId },
+            });
+            call.on("stream", (remoteStream: MediaStream) => {
+              setPeerStreams((prev) => ({
+                ...prev,
+                [remotePlayerId]: remoteStream,
+              }));
+            });
+          },
+        );
+      } catch (e) {
+        console.error("Camera access denied or unavailable:", e);
+        setIsVideoEnabled(false); // Reset the button if they click "Deny" on the popup
+      }
+    };
+
+    initVideo();
+
+    // CLEANUP: When they toggle the camera off, kill the stream and close connections
+    return () => {
+      if (localStream) {
+        localStream.getTracks().forEach((track) => track.stop()); // Turns off the webcam light
+      }
+      if (peer) {
+        peer.destroy(); // Disconnects from the mesh
+      }
+      socketRef.current?.off("user_video_joined");
+      setMyStream(null);
+      setPeerStreams({});
+    };
+  }, [isVideoEnabled, gameId, playerId]);
+
+  // load game
   useEffect(() => {
     const getCookie = (name: string) => {
       const value = `; ${document.cookie}`;
@@ -81,18 +177,48 @@ export default function GameRoom({ params }: { params: Promise<RouteParams> }) {
       setPlayerName(localPlayerName);
     }
 
-    const socket = io(process.env.NEXT_PUBLIC_SOCKET_URL);
+    const socket = io(process.env.NEXT_PUBLIC_SOCKET_URL, {
+      reconnectionAttempts: 2, // Try to connect 3 times before giving up
+      timeout: 5000, // 10 second connection timeout
+    });
     socketRef.current = socket;
 
+    socket.on("connect_error", (err) => {
+      console.error("Socket connection failed:", err.message);
+      clearTimeout(connectionTimeout); // Stop the watchdog
+      setServerDown(true); // <--- SPECIFIC SERVER DOWN STATE
+      setIsLoading(false);
+    });
+
     socket.on("connect", () => {
+      setServerDown(false);
       socket.emit("join_game", { gameId, playerId: localPlayerId });
       if (token) {
         socket.emit("join_host_room", { gameId, hostToken: token });
       }
     });
 
+    // If we don't get a game_state_sync within 7 seconds, trigger the error
+    const connectionTimeout = setTimeout(() => {
+      if (isLoading) {
+        console.error("No game state received - Table likely missing");
+        setGameExists(false); // <--- SPECIFIC GAME MISSING STATE
+        setIsLoading(false);
+      }
+    }, 7000);
+
     socket.on("game_state_sync", (state) => {
+      clearTimeout(connectionTimeout);
+      // If the server sends an empty state, treat it as a missing game.
+      if (!state) {
+        console.error("Received null game state");
+        setGameExists(false);
+        setIsLoading(false);
+        return;
+      }
+
       setGameState(state);
+      setIsLoading(false);
       setNewSmallBlind(state.settings.smallBlind);
       setNewBigBlind(state.settings.bigBlind);
       setNewTimeout(state.settings.turnTimeoutMs / 1000);
@@ -122,6 +248,7 @@ export default function GameRoom({ params }: { params: Promise<RouteParams> }) {
     });
 
     socket.on("seat_approved", () => setHasPendingRequest(false));
+
     socket.on("seat_rejected", ({ reason }) => {
       setHasPendingRequest(false);
       alert(reason || "Your seat request was rejected.");
@@ -156,6 +283,54 @@ export default function GameRoom({ params }: { params: Promise<RouteParams> }) {
       showStatus("Queued for next hand");
     });
 
+    socket.on("chips_adjusted", ({ seatIndex, newTotal }) => {
+      setGameState((prev: any) => {
+        if (!prev) return prev;
+        const newSeats = [...prev.seats];
+        if (newSeats[seatIndex]) {
+          // Update total chips and clear any local pending status
+          newSeats[seatIndex] = {
+            ...newSeats[seatIndex],
+            chips: newTotal,
+            queuedAdjustment: 0,
+          };
+        }
+        return { ...prev, seats: newSeats };
+      });
+    });
+
+    socket.on("adjustment_queued", ({ seatIndex, amountDelta }) => {
+      setGameState((prev: any) => {
+        if (!prev) return prev;
+        const newSeats = [...prev.seats];
+        if (newSeats[seatIndex]) {
+          // Track the pending amount locally so the UI can show it
+          const currentQueued = newSeats[seatIndex].queuedAdjustment || 0;
+          newSeats[seatIndex] = {
+            ...newSeats[seatIndex],
+            queuedAdjustment: currentQueued + amountDelta,
+          };
+        }
+        return { ...prev, seats: newSeats };
+      });
+    });
+
+    socket.on("error", (msg) => {
+      if (msg === "Game not found") {
+        setGameExists(false);
+      }
+    });
+
+    socket.on("new_log", (entry) => {
+      setGameState((prev: any) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          logs: [entry, ...(prev.logs || [])], // Add to the top of the array locally
+        };
+      });
+    });
+
     // Helper to hide status after 3 seconds
     const showStatus = (msg: string) => {
       setSettingsStatus(msg);
@@ -163,6 +338,7 @@ export default function GameRoom({ params }: { params: Promise<RouteParams> }) {
     };
 
     return () => {
+      clearTimeout(connectionTimeout);
       socket.disconnect();
     };
   }, [gameId]);
@@ -272,14 +448,61 @@ export default function GameRoom({ params }: { params: Promise<RouteParams> }) {
     socketRef.current.emit("stand_up", { gameId });
   };
 
-  if (!gameState) {
+  // SCREEN A: Server is literally offline (Render sleeping or URL wrong)
+  if (serverDown) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-gray-900 text-white">
-        Loading Table...
+      <div className="min-h-screen bg-gray-950 flex flex-col items-center justify-center text-white p-6">
+        <div className="bg-gray-900 border border-red-900/50 p-10 rounded-[2rem] shadow-2xl text-center max-w-md border-b-4 border-b-red-600">
+          <h2 className="text-3xl font-black mb-3 text-red-500 text-shadow-glow">
+            Server Offline
+          </h2>
+          <p className="text-gray-400 mb-8 leading-relaxed">
+            The poker server is unreachable. It might be waking up or having
+            trouble connecting.
+          </p>
+          <button
+            onClick={() => window.location.reload()}
+            className="w-full bg-red-600 hover:bg-red-500 py-4 rounded-2xl font-bold transition-all">
+            Try Reconnecting
+          </button>
+        </div>
       </div>
     );
   }
 
+  // SCREEN B: Server is online, but this table ID doesn't exist
+  if (!gameExists) {
+    return (
+      <div className="min-h-screen bg-gray-950 flex flex-col items-center justify-center text-white p-6">
+        <div className="bg-gray-900 border border-gray-800 p-10 rounded-[2rem] shadow-2xl text-center max-w-md border-b-4 border-b-blue-600">
+          <h2 className="text-3xl font-black mb-3 text-white">
+            Table Not Found
+          </h2>
+          <p className="text-gray-400 mb-8 leading-relaxed">
+            The table session has ended or the link is invalid.
+          </p>
+          <button
+            onClick={() => router.push("/")}
+            className="w-full bg-blue-600 hover:bg-blue-500 py-4 rounded-2xl font-bold transition-all">
+            Return to Lobby
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (isLoading || !gameState) {
+    return (
+      <div className="min-h-screen bg-gray-900 flex flex-col items-center justify-center text-white">
+        <div className="w-16 h-16 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mb-4"></div>
+        <p className="text-blue-400 font-bold animate-pulse uppercase tracking-widest text-xs">
+          Syncing with Table...
+        </p>
+      </div>
+    );
+  }
+
+  // 3. NOW IT IS SAFE TO READ gameState
   const mySeatIndex = gameState.seats.findIndex(
     (s: any) => s && s.id === playerId,
   );
@@ -325,8 +548,39 @@ export default function GameRoom({ params }: { params: Promise<RouteParams> }) {
               {/* This space is where the Host "Controls" button lives */}
             </div>
 
-            {/* Right Side: Stand Up Button */}
-            <div className="pointer-events-auto">
+            {/* Right Side: Stand Up & Ledger Buttons */}
+            <div className="pointer-events-auto flex gap-3">
+              {/* --- NEW: CAMERA TOGGLE BUTTON --- */}
+              <button
+                onClick={() => setIsVideoEnabled(!isVideoEnabled)}
+                className={`px-4 py-2 rounded-lg font-bold text-sm shadow-lg transition-all border flex items-center gap-2 ${
+                  isVideoEnabled
+                    ? "bg-green-600/20 text-green-400 border-green-600 hover:bg-green-600 hover:text-white"
+                    : "bg-gray-800 text-gray-300 border-gray-600 hover:bg-gray-700 hover:text-white"
+                }`}>
+                <svg
+                  className="w-4 h-4"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24">
+                  {isVideoEnabled ? (
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"
+                    />
+                  ) : (
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z M3 3l18 18"
+                    />
+                  )}
+                </svg>
+                {isVideoEnabled ? "Cam On" : "Cam Off"}
+              </button>
               {alreadySeated && (
                 <button
                   onClick={standUp}
@@ -341,8 +595,35 @@ export default function GameRoom({ params }: { params: Promise<RouteParams> }) {
                     : "Stand Up"}
                 </button>
               )}
+
+              {/* MOVED LEDGER BUTTON INSIDE THE POINTER-EVENTS-AUTO DIV */}
+              <button
+                onClick={() => setShowLogModal(true)}
+                className="bg-gray-800 text-gray-300 border border-gray-600 px-4 py-2 rounded-lg font-bold text-sm hover:bg-gray-700 hover:text-white transition-all shadow-lg flex items-center gap-2">
+                <svg
+                  className="w-4 h-4"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24">
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+                  />
+                </svg>
+                Ledger
+              </button>
             </div>
           </div>
+
+          {/* Keep the modal rendering logic here */}
+          {showLogModal && (
+            <GameLogModal
+              logs={gameState.logs || []}
+              onClose={() => setShowLogModal(false)}
+            />
+          )}
 
           {/* BOTTOM LEFT: Invite Link */}
           <div className="absolute bottom-6 left-6 z-40 bg-gray-900/60 backdrop-blur-sm p-3 rounded-xl border border-gray-700 hover:border-gray-500 transition-colors group">
@@ -401,6 +682,9 @@ export default function GameRoom({ params }: { params: Promise<RouteParams> }) {
                 turnIndex={gameState.currentTurnIndex}
                 phase={gameState.phase}
                 dealerIndex={gameState.dealerButtonIndex}
+                videoStream={
+                  seat?.id === playerId ? myStream : peerStreams[seat?.id]
+                }
               />
             );
           })}
@@ -416,6 +700,13 @@ export default function GameRoom({ params }: { params: Promise<RouteParams> }) {
           setIsRaising={setIsRaising}
           raiseAmount={raiseAmount}
           setRaiseAmount={setRaiseAmount}
+          showdownData={showdownData}
+          handleRevealCard={(cardIndex: number) => {
+            socketRef.current?.emit("reveal_card", { gameId, cardIndex });
+          }}
+          handleRevealAllCards={() => {
+            socketRef.current?.emit("reveal_all_cards", { gameId });
+          }}
         />
       </div>
     </div>

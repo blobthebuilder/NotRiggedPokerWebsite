@@ -5,6 +5,7 @@ const {
   advancePhase,
   getNextActiveIndex,
   evaluateWinner,
+  addGameLog,
 } = require("./gameState");
 
 module.exports = function setupSocketHandlers(io) {
@@ -150,8 +151,35 @@ module.exports = function setupSocketHandlers(io) {
         if (!game || game.hostToken !== hostToken) return;
 
         const player = game.seats[seatIndex];
-        if (player) {
-          player.chips += amountDelta; // amountDelta can be positive (give) or negative (take)
+        if (!player) return;
+
+        // If the game is in progress, queue it
+        if (game.phase !== "waiting" && game.phase !== "showdown") {
+          player.queuedAdjustment =
+            (player.queuedAdjustment || 0) + amountDelta;
+
+          // Notify the host it's queued
+          io.to(gameId).emit("adjustment_queued", {
+            seatIndex,
+            amountDelta,
+          });
+        } else {
+          // Apply immediately if game is idle
+          player.chips += amountDelta;
+          io.to(gameId).emit("chips_adjusted", {
+            seatIndex,
+            newTotal: player.chips,
+          });
+
+          addGameLog(
+            game,
+            {
+              type: "HOST_ADJUSTMENT",
+              message: `Host ${amountDelta > 0 ? "gave" : "took"} $${Math.abs(amountDelta)} ${amountDelta > 0 ? "to" : "from"} ${player.name} instantly.`,
+            },
+            io,
+          );
+
           io.to(gameId).emit("chips_adjusted", {
             seatIndex,
             newTotal: player.chips,
@@ -241,6 +269,34 @@ module.exports = function setupSocketHandlers(io) {
         game.pots[0].amount = 0;
         game.phase = "showdown"; // Freeze the UI
 
+        const winnersData = [];
+        const losersData = [];
+
+        game.seats.forEach((s) => {
+          if (!s || s.handStartChips === undefined) return;
+          const netChange = s.chips - s.handStartChips;
+
+          if (netChange > 0) {
+            winnersData.push({
+              name: s.name,
+              won: netChange,
+              reason: "Opponents Folded",
+            });
+          } else if (netChange < 0) {
+            losersData.push({ name: s.name, lost: Math.abs(netChange) });
+          }
+        });
+
+        addGameLog(
+          game,
+          {
+            type: "HAND_RESULT",
+            winners: winnersData,
+            losers: losersData,
+          },
+          io,
+        );
+
         // Tell the frontend someone won by folding
         io.to(gameId).emit("round_ended", {
           winners: [{ id: winner.id }],
@@ -268,22 +324,54 @@ module.exports = function setupSocketHandlers(io) {
           showdownData.winners.forEach((w) => {
             w.chips = Number((w.chips + winAmount).toFixed(2));
           });
+
+          showdownData.winners.forEach((w) => {
+            const winnerSeat = game.seats.find((s) => s && s.id === w.id);
+            if (winnerSeat) winnerSeat.revealedCards = [true, true];
+          });
           game.pots[0].amount = 0;
+
+          // log outcome
+          const winnersData = [];
+          const losersData = [];
+
+          game.seats.forEach((s) => {
+            if (!s || s.handStartChips === undefined) return;
+            const netChange = s.chips - s.handStartChips;
+
+            if (netChange > 0) {
+              winnersData.push({
+                name: s.name,
+                won: netChange,
+                reason: showdownData.winningDescription,
+              });
+            } else if (netChange < 0) {
+              losersData.push({ name: s.name, lost: Math.abs(netChange) });
+            }
+          });
+
+          addGameLog(
+            game,
+            {
+              type: "HAND_RESULT",
+              winners: winnersData,
+              losers: losersData,
+            },
+            io,
+          );
 
           const revealedCards = showdownData.winners.map((w) => ({
             id: w.id,
             cards: w.cards,
           }));
 
-          // Send the winning data and REVEAL THE CARDS to the frontend
+          // Send the winning data
           io.to(gameId).emit("round_ended", {
             winners: showdownData.winners.map((w) => ({ id: w.id })),
             winningDescription: showdownData.winningDescription,
-            allHoleCards: revealedCards,
           });
-
-          // Wait 8 seconds so players can see the cards and gloat, then auto-deal
-          setTimeout(() => triggerNextHand(gameId, io), 8000);
+          // Wait 5
+          setTimeout(() => triggerNextHand(gameId, io), 5000);
         }
       } else {
         // Round isn't over, just move to the next player
@@ -317,6 +405,37 @@ module.exports = function setupSocketHandlers(io) {
       // NEW: Tell everyone at the table that this player is queued to leave!
       broadcastSafeState(io, gameId, game);
     });
+
+    // --- SHOW CARDS FEATURE ---
+    socket.on("reveal_card", ({ gameId, cardIndex }) => {
+      const game = getGame(gameId);
+      if (!game || game.phase !== "showdown") return;
+
+      const seat = game.seats.find((s) => s && s.id === socket.playerId);
+      if (seat && seat.cards) {
+        if (!seat.revealedCards) seat.revealedCards = [false, false];
+        seat.revealedCards[cardIndex] = true;
+        broadcastSafeState(io, gameId, game);
+      }
+    });
+
+    socket.on("reveal_all_cards", ({ gameId }) => {
+      const game = getGame(gameId);
+      if (!game || game.phase !== "showdown") return;
+
+      const seat = game.seats.find((s) => s && s.id === socket.playerId);
+      if (seat && seat.cards) {
+        // Instantly set both cards to true
+        seat.revealedCards = [true, true];
+        broadcastSafeState(io, gameId, game);
+      }
+    });
+
+    // --- VIDEO SIGNALING ---
+    socket.on("video_peer_ready", ({ gameId, peerId, playerId }) => {
+      // Broadcast this new camera ID to everyone ELSE at the table
+      socket.to(gameId).emit("user_video_joined", { peerId, playerId });
+    });
   });
 };
 
@@ -324,10 +443,17 @@ function broadcastSafeState(io, gameId, game) {
   const publicGameState = JSON.parse(JSON.stringify(game)); // Deep copy
 
   publicGameState.seats.forEach((seat) => {
-    if (seat) delete seat.cards; // NEVER broadcast the hole cards!
+    if (seat && seat.cards) {
+      // Create a secure public version of the cards
+      seat.publicCards = seat.cards.map((card, idx) => {
+        // Only send the real card data if the player explicitly revealed it
+        const isRevealed = seat.revealedCards && seat.revealedCards[idx];
+        return isRevealed ? card : { hidden: true };
+      });
+      delete seat.cards; // NEVER broadcast the hidden hole cards!
+    }
   });
 
-  // Replace the deck array with just a number (so clients know how many cards are left, but not what they are)
   if (Array.isArray(publicGameState.deck)) {
     publicGameState.deck = publicGameState.deck.length;
   }
@@ -369,8 +495,13 @@ function triggerNextHand(gameId, io) {
     return;
   }
 
+  // Clear revealed cards from previous hand
+  game.seats.forEach((seat) => {
+    if (seat) seat.revealedCards = [false, false];
+  });
+
   // Use the engine to initialize the new hand
-  startNewHand(game);
+  startNewHand(game, io);
 
   // Send the new private hole cards securely
   game.seats.forEach((seat) => {

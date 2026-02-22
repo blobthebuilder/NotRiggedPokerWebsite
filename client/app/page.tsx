@@ -43,6 +43,13 @@ export default function Home() {
 
       clearTimeout(wakingTimer);
 
+      if (response.status === 503) {
+        const data = await response.json();
+        alert(data.message);
+        setStatus("idle");
+        return;
+      }
+
       if (!response.ok) throw new Error("Server error");
 
       const { gameId, hostToken } = await response.json();

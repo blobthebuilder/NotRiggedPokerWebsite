@@ -1,5 +1,6 @@
 const games = new Map();
 const Hand = require("pokersolver").Hand;
+const crypto = require("crypto");
 
 function createDeck() {
   const suits = ["hearts", "diamonds", "clubs", "spades"];
@@ -27,13 +28,19 @@ function createDeck() {
 
 function shuffle(deck) {
   for (let i = deck.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
+    const j = crypto.randomInt(0, i + 1);
     [deck[i], deck[j]] = [deck[j], deck[i]];
   }
   return deck;
 }
 
 function createGame(gameId, hostToken) {
+  const MAX_GAMES = parseInt(process.env.MAX_GAMES) || 15;
+
+  if (games.size >= MAX_GAMES) {
+    throw new Error("MAX_CAPACITY");
+  }
+
   games.set(gameId, {
     id: gameId,
     hostToken: hostToken,
@@ -67,12 +74,40 @@ function getNextActiveIndex(game, startIndex) {
 }
 
 // THE ROUND INITIALIZER
-function startNewHand(game) {
+function startNewHand(game, io) {
   game.phase = "preflop";
   game.deck = shuffle(createDeck());
   game.communityCards = [];
   game.pots = [{ amount: 0, eligiblePlayers: [] }];
   game.highestBet = game.settings.bigBlind;
+
+  // apply money updates from host
+  game.seats.forEach((s, index) => {
+    if (s && s.queuedAdjustment) {
+      s.chips += s.queuedAdjustment;
+
+      addGameLog(
+        game,
+        {
+          type: "HOST_ADJUSTMENT",
+          message: `Host ${s.queuedAdjustment > 0 ? "gave" : "took"} $${Math.abs(s.queuedAdjustment)} ${s.queuedAdjustment > 0 ? "to" : "from"} ${s.name}.`,
+        },
+        io,
+      );
+
+      if (io) {
+        io.to(game.id).emit("chips_adjusted", {
+          seatIndex: index,
+          newTotal: s.chips,
+        });
+      }
+      s.queuedAdjustment = 0; // Clear the queue
+    }
+
+    if (s) {
+      s.handStartChips = s.chips;
+    }
+  });
 
   console.log(`\n--- NEW HAND STARTED [Game: ${game.id}] ---`);
   console.log(
@@ -217,6 +252,30 @@ function evaluateWinner(game) {
   };
 }
 
+function addGameLog(game, logData, io) {
+  if (!game.logs) game.logs = [];
+
+  const logEntry = {
+    id: Date.now().toString() + Math.random().toString(36).substr(2, 5),
+    timestamp: new Date().toISOString(),
+    ...logData,
+  };
+
+  game.logs.unshift(logEntry); // Add to the top of the list
+
+  // Keep only the last 50 logs to prevent memory bloat
+  if (game.logs.length > 50) {
+    game.logs.pop();
+  }
+
+  // Broadcast the new log to everyone instantly
+  if (io) {
+    io.to(game.id).emit("new_log", logEntry);
+  }
+
+  return logEntry;
+}
+
 module.exports = {
   games,
   createGame,
@@ -226,4 +285,5 @@ module.exports = {
   isBettingRoundOver,
   advancePhase,
   evaluateWinner,
+  addGameLog,
 };

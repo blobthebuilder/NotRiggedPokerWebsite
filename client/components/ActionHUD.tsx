@@ -1,3 +1,5 @@
+import { getSuitDetails } from "@/lib/getSuits";
+
 export const ActionHUD = ({
   gameState,
   myCards,
@@ -8,6 +10,9 @@ export const ActionHUD = ({
   setIsRaising,
   raiseAmount,
   setRaiseAmount,
+  showdownData,
+  handleRevealCard,
+  handleRevealAllCards,
 }: any) => {
   const mySeatIndex = gameState.seats.findIndex(
     (s: any) => s && s.id === playerId,
@@ -16,6 +21,14 @@ export const ActionHUD = ({
 
   const myPlayer = gameState.seats[mySeatIndex];
   const myChips = myPlayer?.chips || 0;
+
+  // logic to gray out cards
+  const isFolded = !myPlayer?.inHand;
+  const isShowdown = gameState.phase === "showdown";
+  const isWinner =
+    isShowdown && showdownData?.winners?.some((w: any) => w.id === playerId);
+  const isLost = isShowdown && !isWinner;
+  const isGrayedOut = isFolded || isLost;
 
   // 1. Calculate the real "Total Pot" (Main pot + all current bets on the table)
   const mainPot = gameState.pots[0]?.amount || 0;
@@ -41,28 +54,64 @@ export const ActionHUD = ({
       <div className="w-1/3"></div>
 
       {/* Center: Hero Cards */}
-      <div
-        className={`w-1/3 flex justify-center space-x-2 pointer-events-auto transition-transform duration-500`}>
-        {myCards?.map((card: any, i: number) => {
-          const isRed = card.suit === "hearts" || card.suit === "diamonds";
-          return (
-            <div
-              key={i}
-              className="w-20 h-32 bg-white rounded-xl border border-gray-300 flex flex-col items-center justify-center text-black font-bold text-2xl shadow-2xl">
-              <span>{card.value === "T" ? "10" : card.value}</span>
-              <span
-                className={`${isRed ? "text-red-600" : "text-black"} text-3xl`}>
-                {card.suit === "hearts"
-                  ? "♥"
-                  : card.suit === "diamonds"
-                    ? "♦"
-                    : card.suit === "spades"
-                      ? "♠"
-                      : "♣"}
-              </span>
-            </div>
-          );
-        })}
+      <div className="w-1/3 flex flex-col items-center justify-end pointer-events-auto transition-transform duration-500 relative">
+        {/* NEW: SHOW ALL BUTTON - Only shows if both cards aren't revealed yet */}
+        {isShowdown &&
+          isGrayedOut &&
+          (!myPlayer?.revealedCards?.[0] || !myPlayer?.revealedCards?.[1]) && (
+            <button
+              onClick={handleRevealAllCards}
+              className="mb-4 bg-gray-900/90 hover:bg-gray-700 text-white text-[10px] font-black px-5 py-2 rounded-full border border-gray-500 shadow-lg transition-all uppercase tracking-widest animate-bounce hover:animate-none hover:scale-105 active:scale-95">
+              Show All
+            </button>
+          )}
+
+        {/* Your Existing Cards Row */}
+        <div className="flex justify-center space-x-2">
+          {myCards?.map((card: any, i: number) => {
+            const { icon, color } = getSuitDetails(card.suit);
+            const isRevealed = myPlayer?.revealedCards?.[i];
+            const cardGrayedOut = isGrayedOut && !isRevealed;
+
+            return (
+              <div
+                key={i}
+                onClick={() => {
+                  if (isShowdown && !isRevealed) {
+                    handleRevealCard(i);
+                  }
+                }}
+                className={`relative w-24 h-36 sm:w-28 sm:h-40 bg-white rounded-xl border-2 flex flex-col items-center justify-center text-black font-black text-3xl sm:text-4xl shadow-2xl transition-all duration-300
+    ${cardGrayedOut ? "grayscale opacity-50 border-gray-400" : "border-gray-300 hover:-translate-y-3 hover:shadow-[0_20px_40px_rgba(0,0,0,0.4)]"}
+    ${isShowdown && !isRevealed ? "cursor-pointer hover:ring-4 hover:ring-blue-500/50" : ""}
+  `}>
+                {/* The top-left corner indicator (Optional but looks highly professional) */}
+                <div className="absolute top-2 left-2 flex flex-col items-center leading-tight">
+                  <span className="text-xl md:text-2xl font-black tracking-tighter">
+                    {card.value === "T" ? "10" : card.value}
+                  </span>
+                  <span className={`${color} text-xl md:text-2xl mt-[-2px]`}>
+                    {icon}
+                  </span>
+                </div>
+
+                {/* The giant center suit */}
+                <span
+                  className={`${color} text-7xl sm:text-8xl opacity-95 drop-shadow-sm`}>
+                  {icon}
+                </span>
+
+                {isShowdown && cardGrayedOut && (
+                  <div className="absolute inset-0 flex items-center justify-center bg-black/40 rounded-xl opacity-0 hover:opacity-100 transition-opacity">
+                    <span className="text-white text-sm uppercase tracking-widest font-black border-2 border-white/70 px-3 py-1.5 rounded-md backdrop-blur-sm">
+                      Show
+                    </span>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
       </div>
 
       {/* Right: Betting Controls */}
